@@ -1,0 +1,5 @@
+project_id    = "walkboys-mc-fun-one"
+region        = "us-west3"
+zone          = "us-west3-a"
+instance_name = "mc-fun-one"
+machine_type  = "e2-medium"

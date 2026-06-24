@@ -1,0 +1,141 @@
+---
+- name: Install and Configure Minecraft Fabric Server (Ubuntu)
+  hosts: all
+  become: true
+  vars:
+    minecraft_user: "minecraft"
+    minecraft_group: "minecraft"
+    minecraft_home: "/opt/minecraft"
+    
+    # Minecraft 1.21 requires Java 21
+    java_package: "openjdk-21-jre-headless"
+    
+    # Memory configuration for the JVM
+    minecraft_init_memory: "1024M"
+    minecraft_max_memory: "2048M"
+    
+    # Fabric Installer and API Configuration (Minecraft 1.21)
+    minecraft_version: "1.21"
+    fabric_installer_url: "https://maven.fabricmc.net/net/fabricmc/fabric-installer/LATEST/fabric-installer-LATEST.jar"
+    fabric_api_url: "https://github.com/FabricMC/fabric-api/releases/download/0.100.1+1.21/fabric-api-0.100.1+1.21.jar"
+
+  tasks:
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Java and dependencies
+      apt:
+        name:
+          - "{{ java_package }}"
+          - wget
+          - screen
+          - ufw
+        state: present
+
+    - name: Create minecraft group
+      group:
+        name: "{{ minecraft_group }}"
+        state: present
+
+    - name: Create minecraft system user
+      user:
+        name: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        home: "{{ minecraft_home }}"
+        shell: /bin/bash
+        system: yes
+        state: present
+
+    - name: Create Minecraft server directory
+      file:
+        path: "{{ minecraft_home }}"
+        state: directory
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        mode: '0755'
+
+    - name: Create Minecraft mods directory
+      file:
+        path: "{{ minecraft_home }}/mods"
+        state: directory
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        mode: '0755'
+
+    - name: Download Fabric Installer jar
+      get_url:
+        url: "{{ fabric_installer_url }}"
+        dest: "{{ minecraft_home }}/fabric-installer.jar"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        mode: '0755'
+
+    - name: Run Fabric Installer to set up server jar
+      command:
+        cmd: "java -jar fabric-installer.jar server -mcversion {{ minecraft_version }} -downloadMinecraft"
+        chdir: "{{ minecraft_home }}"
+        creates: "{{ minecraft_home }}/fabric-server-launch.jar"
+      become: true
+      become_user: "{{ minecraft_user }}"
+
+    - name: Download Fabric API mod jar
+      get_url:
+        url: "{{ fabric_api_url }}"
+        dest: "{{ minecraft_home }}/mods/fabric-api.jar"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        mode: '0755'
+
+    - name: Accept Minecraft EULA
+      copy:
+        content: "eula=true"
+        dest: "{{ minecraft_home }}/eula.txt"
+        owner: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        mode: '0644'
+
+    - name: Create systemd service file for Minecraft
+      copy:
+        dest: /etc/systemd/system/minecraft.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Minecraft Fabric Server
+          After=network.target
+
+          [Service]
+          User={{ minecraft_user }}
+          Group={{ minecraft_group }}
+          WorkingDirectory={{ minecraft_home }}
+          Restart=on-failure
+
+          # We run inside a screen session to easily attach/interact with the console if needed
+          ExecStart=/usr/bin/screen -DmS minecraft /usr/bin/java -Xms{{ minecraft_init_memory }} -Xmx{{ minecraft_max_memory }} -jar fabric-server-launch.jar nogui
+          
+          ExecStop=/usr/bin/screen -p 0 -S minecraft -X eval 'stuff "stop\015"'
+          
+          # Wait up to 30 seconds for clean stop before SIGKILL
+          TimeoutStopSec=30
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd to load new service
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start Minecraft service
+      systemd:
+        name: minecraft
+        enabled: yes
+        state: started
+
+    - name: Configure local firewall (UFW)
+      ufw:
+        rule: allow
+        port: '25565'
+        proto: tcp

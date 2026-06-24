@@ -1,0 +1,78 @@
+---
+- name: Install and Configure Minecraft Fabric Client (Windows 11)
+  hosts: all
+  gather_facts: yes
+  vars:
+    # Minecraft 1.21 requires Java 21
+    java_package_name: "openjdk21"
+    minecraft_version: "1.21"
+    
+    # Matching exact versions with the server for 100% compatibility
+    fabric_installer_url: "https://maven.fabricmc.net/net/fabricmc/fabric-installer/LATEST/fabric-installer-LATEST.jar"
+    fabric_api_url: "https://github.com/FabricMC/fabric-api/releases/download/0.100.1+1.21/fabric-api-0.100.1+1.21.jar"
+
+    # Temporary directory on the Windows client for setup assets
+    temp_download_dir: "C:\\Temp\\MinecraftSetup"
+
+  tasks:
+    - name: Ensure temporary download directory exists
+      ansible.windows.win_file:
+        path: "{{ temp_download_dir }}"
+        state: directory
+
+    - name: Install Chocolatey Package Manager (if not present)
+      ansible.windows.win_shell: |
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        }
+      register: choco_install
+      changed_when: "'Installing Chocolatey' in choco_install.stdout"
+
+    - name: Install Java 21 via Chocolatey
+      chocolatey.chocolatey.win_chocolatey:
+        name: "{{ java_package_name }}"
+        state: present
+
+    - name: Install Minecraft Launcher via Chocolatey
+      chocolatey.chocolatey.win_chocolatey:
+        name: minecraft-launcher
+        state: present
+
+    - name: Ensure default .minecraft directory exists in APPDATA
+      ansible.windows.win_file:
+        path: "{{ ansible_env.APPDATA }}\\.minecraft"
+        state: directory
+
+    - name: Ensure mods directory exists
+      ansible.windows.win_file:
+        path: "{{ ansible_env.APPDATA }}\\.minecraft\\mods"
+        state: directory
+
+    - name: Download Fabric Installer jar
+      ansible.windows.win_get_url:
+        url: "{{ fabric_installer_url }}"
+        dest: "{{ temp_download_dir }}\\fabric-installer.jar"
+
+    - name: Execute Fabric Client Installer (Headless Client Profile)
+      ansible.windows.win_shell: |
+        java -jar fabric-installer.jar client -mcversion {{ minecraft_version }}
+      args:
+        chdir: "{{ temp_download_dir }}"
+      register: fabric_install_output
+      changed_when: true
+
+    - name: Download and install Fabric API mod jar (v0.100.1+1.21)
+      ansible.windows.win_get_url:
+        url: "{{ fabric_api_url }}"
+        dest: "{{ ansible_env.APPDATA }}\\.minecraft\\mods\\fabric-api-0.100.1+1.21.jar"
+
+    - name: Clean up temporary download directory
+      ansible.windows.win_file:
+        path: "{{ temp_download_dir }}"
+        state: absent
+
+    - name: Setup complete message
+      ansible.windows.win_shell: |
+        Write-Output "Fabric client installation complete! Please launch the Minecraft Launcher and select the 'Fabric Loader {{ minecraft_version }}' profile."
